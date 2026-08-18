@@ -36,6 +36,7 @@ export class Application {
   private readonly container = new Container();
   private routes: CompiledRoute[] = [];
   private controllers: any[] = [];
+  private rootModule: any;
 
   private globalGuards: ClassOrInstance<CanActivate>[] = [];
   private globalInterceptors: ClassOrInstance<NestInterceptor>[] = [];
@@ -46,6 +47,7 @@ export class Application {
 
   static create(rootModule: any, options: ApplicationOptions = {}): Application {
     const app = new Application();
+    app.rootModule = rootModule;
     app.controllers = resolveModule(rootModule, app.container);
     app.routes = buildRoutes(app.controllers);
     app.globalGuards = options.guards ?? [];
@@ -89,10 +91,34 @@ export class Application {
     this.globalPipes.push(...pipes);
   }
 
-  private resolveRef<T>(ref: ClassOrInstance<T>): T {
+  private resolveRef<T>(ref: ClassOrInstance<T>, scopeModule: any): T {
     // já é uma instância (ex: new ValidationPipe({...})) -> usa direto.
-    // é uma classe (ex: AuthGuard) -> resolve via DI, com fallback pra instanciar direto.
-    return typeof ref === 'function' ? this.container.resolveOrInstantiate(ref as any) : ref;
+    // é uma classe (ex: AuthGuard) -> resolve via DI (no escopo do módulo), com fallback pra instanciar direto.
+    return typeof ref === 'function' ? this.container.resolveOrInstantiateInModule(scopeModule, ref as any) : ref;
+  }
+
+  /**
+   * Junta refs globais (escopo: módulo raiz) com refs de decorator no controller/handler
+   * (escopo: módulo dono do controller), cada uma já carregando o escopo certo pra resolveRef().
+   */
+  private collectRefs<T>(
+    globalRefs: ClassOrInstance<T>[],
+    metadataKey: symbol,
+    controllerClass: any,
+    handlerName: string | symbol,
+    ownerModule: any
+  ): Array<{ ref: ClassOrInstance<T>; scope: any }> {
+    return [
+      ...globalRefs.map((ref) => ({ ref, scope: this.rootModule })),
+      ...((Reflect.getMetadata(metadataKey, controllerClass) || []) as ClassOrInstance<T>[]).map((ref) => ({
+        ref,
+        scope: ownerModule,
+      })),
+      ...((Reflect.getMetadata(metadataKey, controllerClass, handlerName) || []) as ClassOrInstance<T>[]).map((ref) => ({
+        ref,
+        scope: ownerModule,
+      })),
+    ];
   }
 
   /**
@@ -119,16 +145,14 @@ export class Application {
     route.paramNames.forEach((name, i) => (routeParams[name] = match[i + 1]));
 
     const context = new ExecutionContext(request, route.controllerClass, route.handlerName, routeParams);
+    // Escopo de resolução do controller (encapsulamento: só enxerga seus providers + exports dos imports).
+    const ownerModule = this.container.getControllerOwnerModule(route.controllerClass) ?? this.rootModule;
 
     try {
       // 1) Guards — global -> controller -> método, na ordem, primeira negativa já barra.
-      const guardRefs: ClassOrInstance<CanActivate>[] = [
-        ...this.globalGuards,
-        ...(Reflect.getMetadata(GUARDS_METADATA, route.controllerClass) || []),
-        ...(Reflect.getMetadata(GUARDS_METADATA, route.controllerClass, route.handlerName) || []),
-      ];
-      for (const ref of guardRefs) {
-        const guard = this.resolveRef(ref);
+      const guardRefs = this.collectRefs(this.globalGuards, GUARDS_METADATA, route.controllerClass, route.handlerName, ownerModule);
+      for (const { ref, scope } of guardRefs) {
+        const guard = this.resolveRef(ref, scope);
         const allowed = await guard.canActivate(context);
         if (!allowed) throw new ForbiddenException('Acesso negado');
       }
@@ -143,11 +167,7 @@ export class Application {
       }
 
       // 3) Monta os argumentos do handler, aplicando pipes (global -> controller -> método -> parâmetro)
-      const pipeRefs: ClassOrInstance<PipeTransform>[] = [
-        ...this.globalPipes,
-        ...(Reflect.getMetadata(PIPES_METADATA, route.controllerClass) || []),
-        ...(Reflect.getMetadata(PIPES_METADATA, route.controllerClass, route.handlerName) || []),
-      ];
+      const pipeRefs = this.collectRefs(this.globalPipes, PIPES_METADATA, route.controllerClass, route.handlerName, ownerModule);
 
       const paramsMeta: ParamMeta[] =
         Reflect.getMetadata(PARAMS_METADATA, route.controllerClass, route.handlerName) || [];
@@ -175,10 +195,10 @@ export class Application {
 
         const argType = PARAM_TYPE_TO_ARG_TYPE[p.type];
         if (argType) {
-          const metadata: ArgumentMetadata = { type: argType, data: p.key };
-          const allPipes = [...pipeRefs, ...(p.pipes ?? [])];
-          for (const pipeRef of allPipes) {
-            const pipe = this.resolveRef(pipeRef);
+          const metadata: ArgumentMetadata = { type: argType, data: p.key, metatype: p.dtoType };
+          const allPipes = [...pipeRefs, ...(p.pipes ?? []).map((ref) => ({ ref, scope: ownerModule }))];
+          for (const { ref, scope } of allPipes) {
+            const pipe = this.resolveRef(ref, scope);
             value = await pipe.transform(value, metadata);
           }
         }
@@ -187,20 +207,22 @@ export class Application {
       }
 
       // 4) Interceptors — envolvem a chamada do handler no modelo "onion" (o primeiro da lista é o mais externo)
-      const controllerInstance = this.container.resolve(route.controllerClass);
+      const controllerInstance = this.container.resolveInModule(ownerModule, route.controllerClass);
       const finalHandler: CallHandler = {
         handle: async () => (controllerInstance as any)[route.handlerName](...args),
       };
 
-      const interceptorRefs: ClassOrInstance<NestInterceptor>[] = [
-        ...this.globalInterceptors,
-        ...(Reflect.getMetadata(INTERCEPTORS_METADATA, route.controllerClass) || []),
-        ...(Reflect.getMetadata(INTERCEPTORS_METADATA, route.controllerClass, route.handlerName) || []),
-      ];
+      const interceptorRefs = this.collectRefs(
+        this.globalInterceptors,
+        INTERCEPTORS_METADATA,
+        route.controllerClass,
+        route.handlerName,
+        ownerModule
+      );
 
       let next: CallHandler = finalHandler;
       for (let i = interceptorRefs.length - 1; i >= 0; i--) {
-        const interceptor = this.resolveRef(interceptorRefs[i]);
+        const interceptor = this.resolveRef(interceptorRefs[i].ref, interceptorRefs[i].scope);
         const currentNext = next;
         next = { handle: () => interceptor.intercept(context, currentNext) };
       }
@@ -211,7 +233,10 @@ export class Application {
       return Response.json(result ?? null, { status: 200 });
     } catch (err: any) {
       if (err instanceof HttpException) {
-        return Response.json({ message: err.message }, { status: err.status });
+        return Response.json(
+          { status: err.status, message: err.message, ...err.details },
+          { status: err.status }
+        );
       }
       console.error('[nest-rr7] Erro não tratado:', err);
       const fallback = new InternalServerErrorException();

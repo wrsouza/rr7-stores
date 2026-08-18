@@ -1,58 +1,90 @@
-import { AuthGuard } from '../../common/auth.guard';
-import { LoggingInterceptor } from '../../common/logging.interceptor';
-import { HttpException } from '../../core/application';
-import { Body, Controller, Get, Param, Post, UseGuards, UseInterceptors } from '../../core/decorators';
-import { Inject } from '../../core/decorators/injectable.decorator';
+import { AuthGuard } from "../../common/auth.guard";
+import { LoggingInterceptor } from "../../common/logging.interceptor";
+import { RolesGuard } from "../../common/roles.guard";
 import {
-  ApiBadRequestResponse,
-  ApiBody,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Put,
+  Roles,
+  UseGuards,
+  UseInterceptors,
+} from "../../core/decorators";
+import { Inject } from "../../core/decorators/injectable.decorator";
+import {
+  ApiBearerAuth,
   ApiCreatedResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
-  ApiParam,
-  ApiSecurity,
+  ApiResponse,
   ApiTags,
-} from '../../core/decorators/swagger';
-import { ParseIntPipe } from '../../core/pipes';
-import { CreateUserDto, UserDto } from './users.dto';
-import { UsersService } from './users.service';
+} from "../../core/decorators/swagger";
+import {
+  type UserCreateInput,
+  UserDto,
+  type UserUpdateInput,
+  userCreateSchema,
+  userUpdateSchema,
+} from "./dtos";
+import { UsersService } from "./users.service";
 
-@ApiTags('users')
-@Controller('users')
-@UseInterceptors(LoggingInterceptor) // aplica a todos os métodos do controller
+@ApiTags("Users")
+@Controller("users")
+@UseInterceptors(LoggingInterceptor)
+@UseGuards(AuthGuard, RolesGuard)
+@ApiBearerAuth()
 export class UsersController {
-  // Injeção explícita por token (a própria classe) — não depende de
-  // reflection automática de tipos, então funciona com o esbuild do Vite.
-  constructor(@Inject(UsersService) private readonly usersService: UsersService) {}
+  constructor(
+    @Inject(UsersService) private readonly usersService: UsersService,
+  ) {}
 
   @Get()
-  @ApiOperation({ summary: 'Lista todos os usuários' })
+  @Roles("user_list")
+  @ApiOperation({ summary: "Lista todos os usuários" })
   @ApiOkResponse({ type: UserDto, isArray: true })
   findAll() {
     return this.usersService.findAll();
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Busca um usuário pelo id' })
-  @ApiParam({ name: 'id', description: 'ID do usuário' })
-  @ApiOkResponse({ type: UserDto })
-  @ApiNotFoundResponse({ description: 'Usuário não encontrado' })
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    const user = this.usersService.findOne(id);
-    if (!user) throw new HttpException('Usuário não encontrado', 404);
-    return user;
+  @Post()
+  @Roles("user_create")
+  @ApiOperation({ summary: "Cria um novo usuário" })
+  @ApiCreatedResponse({ type: UserDto })
+  create(@Body(userCreateSchema) data: UserCreateInput): Promise<UserDto> {
+    return this.usersService.createOne(data);
   }
 
-  @Post()
-  @UseGuards(AuthGuard) // só este endpoint exige x-api-key
-  @ApiSecurity('api_key') // ...e o doc anuncia isso (scheme registrado no DocumentBuilder)
-  @ApiOperation({ summary: 'Cria um novo usuário (requer x-api-key: secret)' })
-  @ApiBody({ type: CreateUserDto })
-  @ApiCreatedResponse({ type: UserDto })
-  @ApiBadRequestResponse({ description: 'name é obrigatório' })
-  create(@Body('name') name: string) {
-    if (!name) throw new HttpException('name é obrigatório', 400);
-    return this.usersService.create(name);
+  @Get(":id")
+  @Roles("user_show")
+  @ApiOperation({ summary: "Busca um usuário pelo id" })
+  @ApiOkResponse({ type: UserDto })
+  @ApiNotFoundResponse({ description: "Usuário não encontrado" })
+  findOne(@Param("id") id: string): Promise<UserDto> {
+    return this.usersService.findOne(id);
+  }
+
+  @Put(":id")
+  @Roles("user_update")
+  @ApiOperation({ summary: "Atualiza os dados do usuario" })
+  @ApiNotFoundResponse({ description: "Usuário não encontrado" })
+  @ApiOkResponse({ type: UserDto })
+  updateOne(
+    @Param("id") id: string,
+    @Body(userUpdateSchema) data: UserUpdateInput,
+  ): Promise<UserDto> {
+    return this.usersService.updateOne(id, data);
+  }
+
+  @Delete(":id")
+  @Roles("user_delete")
+  @ApiOperation({ summary: "Exclui um usuário pelo id" })
+  @ApiNotFoundResponse({ description: "Usuário não encontrado" })
+  @ApiResponse({ status: 204, description: "No Response" })
+  deleteOne(@Param("id") id: string): Promise<void> {
+    return this.usersService.deleteOne(id);
   }
 }

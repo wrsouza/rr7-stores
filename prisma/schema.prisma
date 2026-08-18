@@ -9,5 +9,81 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
+}
+
+model Store {
+  id             String          @id @default(uuid())
+  name           String          @unique
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  companies      Company[]
+  storeUserRoles StoreUserRole[]
+
+  @@map("stores")
+}
+
+model User {
+  id             String          @id @default(uuid())
+  name           String
+  email          String          @unique
+  password       String
+  isActive       Boolean         @default(false) @map("is_active")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  storeUserRoles StoreUserRole[]
+
+  @@map("users")
+}
+
+model Role {
+  id             String          @id @default(uuid())
+  name           String          @unique
+  description    String
+  isActive       Boolean         @default(false) @map("is_active")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  storeUserRoles StoreUserRole[]
+
+  @@map("roles")
+}
+
+model StoreUserRole {
+  storeId String @map("store_id")
+  userId  String @map("user_id")
+  roleId  String @map("role_id")
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role  Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([storeId, userId, roleId])
+  @@map("store_user_role")
+}
+
+model Company {
+  id        String     @id @default(uuid())
+  storeId   String     @map("store_id")
+  store     Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name      String     @unique
+  isActive  Boolean    @default(false) @map("is_active")
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+  customers Customer[]
+
+  @@map("companies")
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  companyId String   @map("company_id")
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  email     String   @unique
+  password  String
+  isActive  Boolean  @default(false) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("customers")
 }

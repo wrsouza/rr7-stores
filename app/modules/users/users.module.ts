@@ -1,9 +1,11 @@
-import { Module } from '../../core/decorators';
-import { UsersController } from './users.controller';
-import { UsersService } from './users.service';
+import { BcryptService } from "../../common/services";
+import { Module } from "../../core/decorators";
+import { UserRepository } from "../../repositories";
+import { UsersController } from "./users.controller";
+import { UsersService } from "./users.service";
 
 @Module({
   controllers: [UsersController],
-  providers: [UsersService],
+  providers: [UsersService, UserRepository, BcryptService],
 })
 export class UsersModule {}

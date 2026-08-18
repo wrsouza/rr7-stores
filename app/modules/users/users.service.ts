@@ -1,28 +1,95 @@
-import { Injectable } from '../../core/decorators';
-
-export interface User {
-  id: string;
-  name: string;
-}
+import { BcryptService } from "../../common/services";
+import { Injectable } from "../../core/decorators";
+import { Inject } from "../../core/decorators/injectable.decorator";
+import { BadRequestException, NotFoundException } from "../../core/exceptions";
+import { UserRepository } from "../../repositories";
+import {
+  type UserCreateInput,
+  UserDto,
+  type UserUpdateInput,
+} from "./dtos";
 
 @Injectable()
 export class UsersService {
-  private users: User[] = [
-    { id: '1', name: 'Ana' },
-    { id: '2', name: 'Bruno' },
-  ];
+  constructor(
+    @Inject(UserRepository) private readonly repository: UserRepository,
+    @Inject(BcryptService) private readonly bcrypt: BcryptService,
+  ) {}
 
-  findAll(): User[] {
-    return this.users;
+  async findAll(): Promise<UserDto[]> {
+    const users = await this.repository.findMany({});
+    return users.map((user) => new UserDto(user));
   }
 
-  findOne(id: string | number): User | undefined {
-    return this.users.find((u) => String(u.id) === String(id));
+  async findOne(id: string): Promise<UserDto> {
+    const user = await this.findById(id);
+    return new UserDto(user);
   }
 
-  create(name: string): User {
-    const user = { id: String(this.users.length + 1), name };
-    this.users.push(user);
+  async createOne(data: UserCreateInput): Promise<UserDto> {
+    await this.checkEmailExist(data.email);
+    const passwordHash = this.bcrypt.hashSync(data.password);
+    const user = await this.repository.createOne({
+      data: {
+        name: data.name,
+        email: data.email,
+        password: passwordHash,
+        isActive: data.isActive,
+      },
+    });
+
+    return new UserDto(user);
+  }
+
+  async updateOne(id: string, data: UserUpdateInput): Promise<UserDto> {
+    await this.findById(id);
+
+    if (data.email) {
+      await this.checkEmailExist(data.email, id);
+    }
+
+    const updateData = { ...data };
+    if (data.password) {
+      updateData.password = this.bcrypt.hashSync(data.password);
+    }
+
+    const updatedUser = await this.repository.updateOne({
+      where: { id },
+      data: updateData,
+    });
+
+    return new UserDto(updatedUser);
+  }
+
+  async deleteOne(id: string): Promise<void> {
+    await this.findById(id);
+    await this.repository.deleteOne({
+      where: { id },
+    });
+  }
+
+  private async findById(id: string) {
+    const user = await this.repository.findOne({
+      where: {
+        id,
+      },
+    });
+    if (!user) {
+      throw new NotFoundException("User not found");
+    }
     return user;
+  }
+
+  private async checkEmailExist(email: string, id?: string): Promise<void> {
+    const user = await this.repository.findOne({
+      where: {
+        ...(id ? { id: { not: id } } : {}),
+        email,
+      },
+    });
+
+    if (user) {
+      throw new BadRequestException("E-mail already exist");
+    }
   }
 }

@@ -1,10 +1,10 @@
 import type {
-  AuthLoginDataDto,
+  AuthLoginInput,
   AuthLoginResultDto,
   AuthValidateTokenResultDto,
 } from "../dtos";
 
 export interface IAuthService {
-  login(data: AuthLoginDataDto): Promise<AuthLoginResultDto>;
-  validateToken(): Promise<AuthValidateTokenResultDto>;
+  login(data: AuthLoginInput): Promise<AuthLoginResultDto>;
+  validateToken(token: string): Promise<AuthValidateTokenResultDto>;
 }

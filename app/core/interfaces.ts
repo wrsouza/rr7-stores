@@ -1,3 +1,5 @@
+import type { ZodType } from 'zod';
+
 /**
  * Contexto de execução passado a guards e interceptors — versão simplificada
  * do ExecutionContext do Nest (aqui é sempre HTTP, então já vem "achatado").
@@ -46,6 +48,11 @@ export interface NestInterceptor<T = any, R = any> {
 export interface ArgumentMetadata {
   type: 'param' | 'body' | 'query' | 'headers';
   data?: string;
+  /**
+   * Classe de DTO ou schema Zod passado em @Body(Dto|schema)/@Query(Dto|schema),
+   * quando houver — mesmo papel do metatype do Nest.
+   */
+  metatype?: { new (...args: any[]): any } | ZodType;
 }
 
 /** Mesmo contrato do PipeTransform do @nestjs/common. */

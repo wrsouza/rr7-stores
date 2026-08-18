@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { CONTROLLER_METADATA, ROUTES_METADATA, RouteDefinitionMeta, HttpMethod } from './constants';
+import { CONTROLLER_METADATA, ROUTES_METADATA, type RouteDefinitionMeta, type HttpMethod } from './constants';
 
 export interface CompiledRoute {
   method: HttpMethod;

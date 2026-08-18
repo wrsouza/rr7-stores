@@ -1,3 +1,4 @@
+import { z, type ZodType } from 'zod';
 import { BadRequestException } from './exceptions';
 import type { ArgumentMetadata, PipeTransform } from './interfaces';
 
@@ -41,5 +42,39 @@ export class ValidationPipe implements PipeTransform {
     }
 
     return value;
+  }
+}
+
+/**
+ * Equivalente ao ValidationPipe global do Nest, mas usando o schema Zod
+ * passado direto em @Body(schema)/@Query(schema) em vez de decorators do
+ * class-validator num DTO — o mesmo schema serve tanto pra validar quanto
+ * (via SwaggerModule, com z.toJSONSchema()) pra documentar.
+ *
+ * O pipe só precisa ser registrado uma vez, globalmente: não recebe schema
+ * no construtor, ele é lido de `metadata.metatype` (preenchido pelo router a
+ * partir do que foi passado em @Body/@Query). Parâmetros sem schema Zod
+ * (ex: uma classe de DTO comum, ou nenhum tipo) passam direto, sem validação.
+ *
+ * Registro (uma vez, em bootstrap.ts): Application.create(AppModule, { pipes: [new ZodValidationPipe()] })
+ */
+export class ZodValidationPipe implements PipeTransform {
+  transform(value: any, metadata: ArgumentMetadata) {
+    const schema = metadata.metatype;
+    if (!(schema instanceof z.ZodType)) return value;
+
+    const result = (schema as ZodType).safeParse(value);
+    if (!result.success) {
+      // Um issue por campo (o primeiro, se houver mais de uma regra quebrada) —
+      // vira { errors: { campo: mensagem } } no corpo da resposta.
+      const errors: Record<string, string> = {};
+      for (const issue of result.error.issues) {
+        const field = issue.path.join('.') || metadata.data || metadata.type;
+        if (!(field in errors)) errors[field] = issue.message;
+      }
+      throw new BadRequestException('Validation Error', { errors });
+    }
+
+    return result.data;
   }
 }

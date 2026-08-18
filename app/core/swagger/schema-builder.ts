@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { z, type ZodType } from 'zod';
 import { API_PROPERTY_METADATA } from '../constants';
 import type { ApiPropertyOptions } from '../decorators/swagger/api-property.decorator';
 
@@ -19,6 +20,26 @@ function primitiveSchema(type: any): any {
 
 function isDtoClass(type: any): boolean {
   return typeof type === 'function' && type !== String && type !== Number && type !== Boolean;
+}
+
+export function isZodSchema(type: any): type is ZodType {
+  return type instanceof z.ZodType;
+}
+
+/**
+ * Converte um schema Zod pro formato OpenAPI 3.0 via z.toJSONSchema() (nativo
+ * do Zod 4). Quando o schema tem um id (via `.meta({ id: '...' })`), gera um
+ * $ref pra registrar o schema uma vez só em components/schemas — mesmo
+ * comportamento de buildSchemaForClass() pra DTOs de classe.
+ */
+export function buildSchemaForZod(schema: ZodType, schemas: SchemaRegistry): any {
+  const id = (schema.meta?.() as { id?: string } | undefined)?.id;
+  const jsonSchema = z.toJSONSchema(schema, { target: 'openapi-3.0' });
+
+  if (!id) return jsonSchema;
+
+  if (!schemas.has(id)) schemas.set(id, jsonSchema);
+  return { $ref: `#/components/schemas/${id}` };
 }
 
 export function buildSchemaForClass(cls: any, schemas: SchemaRegistry): { $ref: string } {
@@ -46,7 +67,7 @@ export function buildSchemaForClass(cls: any, schemas: SchemaRegistry): { $ref: 
   return { $ref: `#/components/schemas/${name}` };
 }
 
-function propertyToSchema(opts: ApiPropertyOptions, schemas: SchemaRegistry): any {
+export function propertyToSchema(opts: ApiPropertyOptions, schemas: SchemaRegistry): any {
   const type = opts.type;
   let schema: any;
 
@@ -65,12 +86,13 @@ function propertyToSchema(opts: ApiPropertyOptions, schemas: SchemaRegistry): an
 }
 
 function resolveSingleType(type: any, schemas: SchemaRegistry): any {
+  if (isZodSchema(type)) return buildSchemaForZod(type, schemas);
   if (isDtoClass(type)) return buildSchemaForClass(type, schemas);
   return primitiveSchema(type);
 }
 
-/** Usado para @ApiResponse/@ApiBody com type + isArray. */
+/** Usado para @ApiResponse/@ApiBody com type + isArray, e para @Body(schema)/@Query(schema). */
 export function resolveTypeSchema(type: any, isArray: boolean | undefined, schemas: SchemaRegistry): any {
-  const single = isDtoClass(type) ? buildSchemaForClass(type, schemas) : primitiveSchema(type);
+  const single = resolveSingleType(type, schemas);
   return isArray ? { type: 'array', items: single } : single;
 }

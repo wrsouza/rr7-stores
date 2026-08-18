@@ -4,6 +4,7 @@ import {
   API_BODY_METADATA,
   API_OPERATION_METADATA,
   API_PARAM_METADATA,
+  API_PROPERTY_METADATA,
   API_QUERY_METADATA,
   API_RESPONSE_METADATA,
   API_SECURITY_METADATA,
@@ -16,10 +17,12 @@ import {
   ROUTES_METADATA,
 } from '../constants';
 import type { ApiBodyOptions, ApiParamOptions, ApiQueryOptions } from '../decorators/swagger/api-params.decorator';
+import type { ApiPropertyOptions } from '../decorators/swagger/api-property.decorator';
 import type { ApiResponseOptions } from '../decorators/swagger/api-response.decorator';
 import type { SecurityRequirement } from '../decorators/swagger/api-security.decorator';
 import type { OpenApiConfig, SecuritySchemeObject } from './document-builder';
-import { resolveTypeSchema, type SchemaRegistry } from './schema-builder';
+import { isZodSchema, propertyToSchema, resolveTypeSchema, type SchemaRegistry } from './schema-builder';
+import { z } from 'zod';
 
 export interface OpenApiDocument {
   openapi: '3.0.0';
@@ -99,13 +102,18 @@ function buildOperation(
   const opMeta = Reflect.getMetadata(API_OPERATION_METADATA, controllerClass, def.handlerName);
   if (opMeta) Object.assign(operation, opMeta);
 
-  operation.parameters = buildParameters(controllerClass, def);
+  const paramsMeta: ParamMeta[] =
+    Reflect.getMetadata(PARAMS_METADATA, controllerClass, def.handlerName) || [];
 
-  const bodyMeta: ApiBodyOptions | undefined = Reflect.getMetadata(
-    API_BODY_METADATA,
-    controllerClass,
-    def.handlerName
-  );
+  operation.parameters = buildParameters(controllerClass, def, paramsMeta, schemas);
+
+  // @ApiBody explícito tem prioridade; na ausência, cai pro DTO passado direto
+  // em @Body(Dto) — não precisa repetir o tipo dos dois lados.
+  let bodyMeta: ApiBodyOptions | undefined = Reflect.getMetadata(API_BODY_METADATA, controllerClass, def.handlerName);
+  if (!bodyMeta) {
+    const bodyParam = paramsMeta.find((p) => p.type === ParamType.BODY && !p.key && p.dtoType);
+    if (bodyParam) bodyMeta = { type: bodyParam.dtoType };
+  }
   if (bodyMeta) {
     operation.requestBody = {
       content: {
@@ -159,11 +167,8 @@ function buildSecurity(controllerClass: any, def: RouteDefinitionMeta): Security
   return Array.from(byScheme.values());
 }
 
-function buildParameters(controllerClass: any, def: RouteDefinitionMeta) {
+function buildParameters(controllerClass: any, def: RouteDefinitionMeta, paramsMeta: ParamMeta[], schemas: SchemaRegistry) {
   // 1) detecta automaticamente a partir dos próprios @Param/@Query do handler
-  const paramsMeta: ParamMeta[] =
-    Reflect.getMetadata(PARAMS_METADATA, controllerClass, def.handlerName) || [];
-
   const byName = new Map<string, any>();
 
   for (const p of paramsMeta) {
@@ -172,6 +177,33 @@ function buildParameters(controllerClass: any, def: RouteDefinitionMeta) {
     }
     if (p.type === ParamType.QUERY && p.key) {
       byName.set(`query:${p.key}`, { name: p.key, in: 'query', required: false, schema: { type: 'string' } });
+    }
+    if (p.type === ParamType.QUERY && !p.key && p.dtoType) {
+      // @Query(Dto) sem key: expande cada @ApiProperty do DTO (ou cada campo
+      // do schema Zod) numa entrada de query própria — mesmo resultado de
+      // listar um @ApiQuery por campo.
+      if (isZodSchema(p.dtoType)) {
+        const jsonSchema = z.toJSONSchema(p.dtoType, { target: 'openapi-3.0' }) as any;
+        const required: string[] = jsonSchema.required ?? [];
+        for (const [name, propSchema] of Object.entries<any>(jsonSchema.properties ?? {})) {
+          byName.set(`query:${name}`, {
+            name,
+            in: 'query',
+            required: required.includes(name),
+            schema: propSchema,
+          });
+        }
+      } else {
+        const props: Record<string, ApiPropertyOptions> = Reflect.getMetadata(API_PROPERTY_METADATA, p.dtoType) || {};
+        for (const [name, opts] of Object.entries(props)) {
+          byName.set(`query:${name}`, {
+            name,
+            in: 'query',
+            required: opts.required !== false,
+            schema: propertyToSchema(opts, schemas),
+          });
+        }
+      }
     }
   }
 

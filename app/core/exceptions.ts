@@ -1,13 +1,14 @@
 export class HttpException extends Error {
-  constructor(message: string, public status = 500) {
+  /** Campos extras mesclados no corpo da resposta (ex: { errors: { campo: mensagem } }). */
+  constructor(message: string, public status = 500, public readonly details?: Record<string, any>) {
     super(message);
   }
 }
 
 // Mesmos nomes/semânticas do @nestjs/common — só a classe base que muda.
 export class BadRequestException extends HttpException {
-  constructor(message = 'Bad Request') {
-    super(message, 400);
+  constructor(message = 'Bad Request', details?: Record<string, any>) {
+    super(message, 400, details);
   }
 }
 
